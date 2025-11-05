@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Generador: QR y Códigos</title>
+  <style>
+    :root{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;}
+    body{margin:0;padding:24px;background:#f6f7fb;color:#111}
+    .card{background:#fff;border-radius:12px;padding:18px;box-shadow:0 6px 18px rgba(15,20,40,0.06);max-width:900px;margin:0 auto}
+    label{display:block;font-size:13px;margin-bottom:6px}
+    input,select,textarea{width:100%;padding:10px;border:1px solid #e3e6ef;border-radius:8px;margin-bottom:12px}
+    .row{display:flex;gap:12px}
+    .col{flex:1}
+    button{background:#2563eb;color:#fff;border:none;padding:10px 14px;border-radius:8px;cursor:pointer}
+    button.secondary{background:#111827;color:#fff}
+    .output{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;margin-top:12px}
+    .output > div{background:#fff;padding:12px;border-radius:8px;border:1px dashed #e6e9f4}
+    .small{font-size:12px;color:#555}
+    .actions{display:flex;gap:8px;margin-top:8px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Generador de códigos — QR & barras</h2>
+    <p class="small">Introduce una dirección web o texto y elige el tipo de código. Puedes descargar o copiar el resultado.</p>
+
+    <label for="inputText">URL o texto</label>
+    <input id="inputText" placeholder="https://ejemplo.com" value="https://example.com">
+
+    <div class="row">
+      <div class="col">
+        <label for="type">Tipo de código</label>
+        <select id="type">
+          <option value="qrcode">QR Code (genérico)</option>
+          <option value="qrcode_wifi">QR — Wi‑Fi (WIFI:S:SSID;T:WPA;P:password;;)</option>
+          <option value="qrcode_vcard">QR — vCard (contacto)</option>
+          <option value="code128">Barcode — Code128 (texto corto)</option>
+          <option value="ean13">Barcode — EAN13 (13 dígitos)</option>
+        </select>
+      </div>
+      <div class="col">
+        <label for="size">Tamaño (px)</label>
+        <input id="size" type="number" value="300" min="80" max="2000">
+      </div>
+    </div>
+
+    <div id="extraOptions" style="display:none;margin-top:6px">
+      <!-- dinamically filled -->
+    </div>
+
+    <div class="actions">
+      <button id="generate">Generar</button>
+      <button id="downloadPng" class="secondary">Descargar PNG</button>
+      <button id="downloadSvg" class="secondary">Descargar SVG</button>
+      <button id="copyBase64" class="secondary">Copiar Base64</button>
+    </div>
+
+    <div class="output" style="margin-top:14px">
+      <div id="canvasWrap">
+        <canvas id="outCanvas"></canvas>
+      </div>
+      <div id="svgWrap"></div>
+    </div>
+
+    <details style="margin-top:12px">
+      <summary class="small">Información</summary>
+      <p class="small">Esta página utiliza librerías en CDN para generar QR y códigos de barras. Para uso sin internet, descarga e incluye las librerías localmente.</p>
+    </details>
+  </div>
+
+  <!-- Librerías desde CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+
+  <script>
+    const inputText = document.getElementById('inputText')
+    const typeSelect = document.getElementById('type')
+    const sizeInput = document.getElementById('size')
+    const extraOptions = document.getElementById('extraOptions')
+    const generateBtn = document.getElementById('generate')
+    const canvas = document.getElementById('outCanvas')
+    const svgWrap = document.getElementById('svgWrap')
+    const downloadPng = document.getElementById('downloadPng')
+    const downloadSvg = document.getElementById('downloadSvg')
+    const copyBase64 = document.getElementById('copyBase64')
+
+    function showExtraOptions(){
+      const t = typeSelect.value
+      extraOptions.innerHTML = ''
+      if(t === 'qrcode_wifi'){
+        extraOptions.innerHTML = `
+          <label>SSID</label><input id="wifi_ssid" placeholder="MiWifi">
+          <label>Contraseña</label><input id="wifi_pass" placeholder="Contraseña">
+          <label>Tipo de cifrado</label>
+          <select id="wifi_enc"><option>WPA</option><option>WEP</option><option>nopass</option></select>
+        `
+      } else if(t === 'qrcode_vcard'){
+        extraOptions.innerHTML = `
+          <label>Nombre</label><input id="vc_name" placeholder="Juan Perez">
+          <label>Teléfono</label><input id="vc_tel" placeholder="+50212345678">
+          <label>Correo</label><input id="vc_email" placeholder="juan@ejemplo.com">
+          <label>Empresa</label><input id="vc_org" placeholder="Mi Empresa">
+        `
+      }
+    }
+
+    typeSelect.addEventListener('change', showExtraOptions)
+    showExtraOptions()
+
+    async function generate(){
+      const t = typeSelect.value
+      const s = parseInt(sizeInput.value) || 300
+      let payload = inputText.value.trim()
+
+      if(!payload){alert('Introduce un texto o URL.');return}
+
+      canvas.width = s
+      canvas.height = s
+      const ctx = canvas.getContext('2d')
+      // clear
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0,0,canvas.width,canvas.height)
+      svgWrap.innerHTML = ''
+
+      try{
+        if(t.startsWith('qrcode')){
+          if(t === 'qrcode_wifi'){
+            const ssid = document.getElementById('wifi_ssid').value || ''
+            const pass = document.getElementById('wifi_pass').value || ''
+            const enc = document.getElementById('wifi_enc').value || 'WPA'
+            // WIFI format: WIFI:T:WPA;S:MySSID;P:MyPass;;
+            payload = `WIFI:T:${enc};S:${escapeWifi(ssid)};P:${escapeWifi(pass)};;`
+          }
+          if(t === 'qrcode_vcard'){
+            const n = document.getElementById('vc_name').value || ''
+            const tel = document.getElementById('vc_tel').value || ''
+            const email = document.getElementById('vc_email').value || ''
+            const org = document.getElementById('vc_org').value || ''
+            payload = `BEGIN:VCARD\nVERSION:3.0\nFN:${n}\nORG:${org}\nTEL:${tel}\nEMAIL:${email}\nEND:VCARD`
+          }
+
+          // generar QR en canvas usando qrcode lib
+          await QRCode.toCanvas(canvas, payload, {width: s, margin:1, color: {dark:'#000000', light:'#ffffff'}})
+
+          // tambien crear svg para descarga
+          const svgString = await QRCode.toString(payload, {type:'svg', width:s, margin:1})
+          svgWrap.innerHTML = '<div><strong>SVG:</strong><div>'+svgString+'</div></div>'
+
+        } else {
+          // barras: generamos en SVG con JsBarcode
+          const svg = document.createElementNS('http://www.w3.org/2000/svg','svg')
+          svg.setAttribute('xmlns','http://www.w3.org/2000/svg')
+          svg.setAttribute('width', s)
+          svg.setAttribute('height', Math.round(s*0.5))
+
+          // Validaciones simples
+          if(t === 'ean13'){
+            const digits = payload.replace(/\D/g,'')
+            if(digits.length !== 13){alert('EAN13 requiere 13 dígitos numéricos.'); return}
+          }
+
+          JsBarcode(svg, payload, {format: t === 'code128'? 'CODE128': 'EAN13', width:2, height:80, displayValue:true})
+          svgWrap.innerHTML = ''
+          svgWrap.appendChild(svg)
+
+          // rasterizar svg a canvas
+          const svgData = new XMLSerializer().serializeToString(svg)
+          const img = new Image()
+          const svgBlob = new Blob([svgData], {type:'image/svg+xml;charset=utf-8'})
+          const url = URL.createObjectURL(svgBlob)
+          await new Promise((res,rej)=>{img.onload = ()=>{res();}; img.onerror=rej; img.src = url})
+          // ajustar canvas
+          canvas.width = img.width || s
+          canvas.height = img.height || Math.round(s*0.5)
+          const ctx2 = canvas.getContext('2d')
+          ctx2.fillStyle = '#fff'
+          ctx2.fillRect(0,0,canvas.width,canvas.height)
+          ctx2.drawImage(img,0,0,canvas.width,canvas.height)
+          URL.revokeObjectURL(url)
+        }
+      }catch(e){console.error(e);alert('Error al generar: '+e.message)}
+    }
+
+    function escapeWifi(s){
+      return String(s).replace(/([\\;,:])/g,'\\$1')
+    }
+
+    generateBtn.addEventListener('click', generate)
+
+    downloadPng.addEventListener('click', ()=>{
+      const mime = 'image/png'
+      try{
+        const data = canvas.toDataURL(mime)
+        const a = document.createElement('a')
+        a.href = data
+        a.download = 'codigo.png'
+        a.click()
+      }catch(e){alert('No hay imagen generada. Presiona Generar primero.')}
+    })
+
+    downloadSvg.addEventListener('click', ()=>{
+      const t = typeSelect.value
+      if(t.startsWith('qrcode')){
+        const payload = inputText.value
+        QRCode.toString(payload, {type:'svg', width:parseInt(sizeInput.value)||300, margin:1}).then(svgString=>{
+          const blob = new Blob([svgString],{type:'image/svg+xml'})
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = 'codigo.svg'
+          a.click()
+          URL.revokeObjectURL(url)
+        })
+      } else {
+        // obtener svg del contenedor
+        const svg = svgWrap.querySelector('svg')
+        if(!svg){alert('Genera primero el código de barras.');return}
+        const svgString = new XMLSerializer().serializeToString(svg)
+        const blob = new Blob([svgString],{type:'image/svg+xml'})
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = 'codigo.svg'
+        a.click()
+        URL.revokeObjectURL(url)
+      }
+    })
+
+    copyBase64.addEventListener('click', async ()=>{
+      try{
+        const data = canvas.toDataURL('image/png')
+        await navigator.clipboard.writeText(data)
+        alert('Base64 copiada al portapapeles (data URL).')
+      }catch(e){alert('No se pudo copiar. Genera primero o concede permisos al portapapeles.')}
+    })
+
+    // generar por defecto
+    //generate()
+  </script>
+</body>
+</html>
